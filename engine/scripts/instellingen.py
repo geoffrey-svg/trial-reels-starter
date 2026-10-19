@@ -160,20 +160,39 @@ def laad(pad=CONFIG):
     return keur(_samen(basis, eigen))
 
 
-def schrijf(nieuw, pad=CONFIG):
-    """Keurt de nieuwe instellingen en bewaart ze. De vorige versie gaat naar mijn-trial-reels/oud/."""
+def _meng(oud, nieuw):
+    """Twee eigen keuzes samen, per veld: wat nieuw is gaat voor."""
+    uit = dict(oud or {})
+    for k, v in (nieuw or {}).items():
+        uit[k] = _meng(uit.get(k), v) if isinstance(v, dict) and isinstance(uit.get(k), dict) else v
+    return uit
+
+
+def eigen_keuzes(pad=CONFIG):
+    """Wat de gebruiker zelf koos, zonder de standaard. Een blok dat ontbreekt, is nog niet gekozen (de setup kijkt daarnaar)."""
     pad = Path(pad)
-    basis = json.loads(STANDAARD.read_text(encoding="utf-8"))
-    if pad.exists():
-        try:
-            basis = laad(pad)
-        except (InstellingFout, json.JSONDecodeError):
-            pass   # de oude instellingen kloppen niet (meer): het nieuwe blok komt op de standaard; de oude blijft bewaard in oud/
-    cfg = keur(_samen(basis, nieuw))
+    try:
+        eigen = json.loads(pad.read_text(encoding="utf-8")) if pad.exists() else {}
+        keur(_samen(json.loads(STANDAARD.read_text(encoding="utf-8")), eigen))
+        return eigen
+    except (InstellingFout, json.JSONDecodeError, AttributeError, TypeError):
+        return {}   # de oude instellingen kloppen niet (meer): opnieuw beginnen; de oude blijft bewaard in oud/
+
+
+def schrijf(nieuw, pad=CONFIG):
+    """Keurt de nieuwe keuzes en bewaart ze. Alleen wat de gebruiker zelf koos komt in het bestand (de standaard vult de
+    rest aan bij het laden), zodat te zien is wat nog niet gevraagd is. De vorige versie gaat naar mijn-trial-reels/oud/."""
+    pad = Path(pad)
+    if not isinstance(nieuw, dict):
+        _fout("het bestand is geen blok met instellingen")
+    eigen = _meng(eigen_keuzes(pad), {k: v for k, v in nieuw.items() if k in ("tekst", "posten", "winners")})
+    cfg = keur(_samen(json.loads(STANDAARD.read_text(encoding="utf-8")), eigen))
+    bewaar = {"versie": 1, **{blok: {k: cfg[blok][k] for k in eigen[blok] if k in cfg[blok]}
+                              for blok in ("tekst", "posten", "winners") if isinstance(eigen.get(blok), dict)}}
     pad.parent.mkdir(parents=True, exist_ok=True)
     if pad.exists():
         shutil.copy2(pad, vrije_naam(pad.parent / "oud", "config", ".json"))
-    pad.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    pad.write_text(json.dumps(bewaar, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return cfg
 
 
@@ -219,6 +238,9 @@ def main():
         else:
             cfg = laad()
         print(in_woorden(cfg))
+        nog = [w for blok, w in (("posten", "de postregels"), ("winners", "wanneer iets een winner is")) if blok not in eigen_keuzes()]
+        if nog:
+            print(f"Nog niet gekozen: {' en '.join(nog)} (setup stap 5); tot dan gelden de standaardwaarden hierboven.")
     except json.JSONDecodeError as e:
         sys.exit(f"Dit is geen geldig blok met instellingen: {e}")
     except InstellingFout as e:

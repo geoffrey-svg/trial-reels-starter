@@ -24,14 +24,15 @@ from zoneinfo import ZoneInfo
 
 from instellingen import MIJN, InstellingFout, laad
 from planning import nl
-from zernio import Zernio, ZernioFout
+from koppelfout import KoppelFout
+from koppeling import maak as maak_koppeling
 
 RIJP_NA = timedelta(hours=48)
 GEEN_BEREIK_NA = 5     # zoveel rijpe reels zonder enig bereik op een account is een signaal
 
 
 def ingepland():
-    """Alles wat deze starter inplande, op Zernio-id, met de ronde en de tekst erbij."""
+    """Alles wat deze starter inplande, op het id bij de koppeling, met de ronde en de tekst erbij."""
     uit = {}
     for boek in sorted((MIJN / "rondes").glob("*/ingepland.json")):
         ronde_map = boek.parent
@@ -110,7 +111,7 @@ def verslag(reels, medianen, cfg, nu):
         regels += ["", "Let op: " + ", ".join("@" + (namen.get(a) or "?") for a in stil) +
                    " heeft op de laatste reels 0 views en 0 bereik. Kijk in de Instagram-app of die reels echt geen views hebben."
                    " Is dat zo, dan laat Instagram ze aan niemand zien: post er een paar dagen minder op en kijk of het terugkomt."
-                   " Hebben ze in de app wel views, dan loopt Zernio achter met de cijfers."]
+                   " Hebben ze in de app wel views, dan loopt de koppeling achter met de cijfers."]
     win = sorted([r for r in reels if r["winner"]], key=lambda r: -r["keer"])
     regels += ["", f"## Winners ({len(win)})", ""]
     if not win:
@@ -151,10 +152,10 @@ def main():
         if not eigen:
             sys.exit("Er is nog niets ingepland met deze starter, dus er zijn nog geen cijfers.")
         nu = datetime.now(timezone.utc)
-        reels = verzamel(Zernio(), eigen, max(1, min(a.dagen, 366)), nu)
+        reels = verzamel(maak_koppeling(cfg), eigen, max(1, min(a.dagen, 366)), nu)
         medianen = beoordeel(reels, cfg["winners"])
         tekst = verslag(reels, medianen, cfg, nu)
-    except (InstellingFout, ZernioFout) as e:
+    except (InstellingFout, KoppelFout) as e:
         sys.exit(str(e))
     map_ = MIJN / "cijfers"
     map_.mkdir(parents=True, exist_ok=True)

@@ -67,6 +67,17 @@ class TestInstellingen(unittest.TestCase):
         self.assertEqual(cfg["tekst"]["font"], "Poppins-ExtraBold.ttf")
         self.assertEqual(len(list((pad.parent / "oud").glob("config-*.json"))), 1, "de kapotte blijft bewaard")
 
+    def test_het_bestand_bewaart_alleen_eigen_keuzes(self):
+        pad = basis.TMP / "cfg-eigen" / "config.json"
+        ins.schrijf({"versie": 1, "tekst": {"font": "Anton-Regular.ttf", "vorm": "rand"}}, pad)
+        self.assertEqual(json.loads(pad.read_text()), {"versie": 1, "tekst": {"font": "Anton-Regular.ttf", "vorm": "rand"}},
+                         "geen postregels in het bestand zolang die niet gekozen zijn")
+        self.assertNotIn("posten", ins.eigen_keuzes(pad))
+        ins.schrijf({"posten": {"per_dag": 3}}, pad)
+        self.assertEqual(ins.eigen_keuzes(pad)["posten"], {"per_dag": 3})
+        self.assertEqual(ins.laad(pad)["posten"]["minuten_tussen"], 45, "de rest komt uit de standaard")
+        self.assertEqual(ins.laad(pad)["tekst"]["font"], "Anton-Regular.ttf")
+
     def test_in_woorden_noemt_wat_er_echt_past(self):
         cfg = ins.keur(json.loads(ins.STANDAARD.read_text(encoding="utf-8")))
         cfg["posten"].update(per_dag=20, minuten_tussen=45, van=9, tot=21)

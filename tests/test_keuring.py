@@ -339,7 +339,7 @@ class TestRest(unittest.TestCase):
         ins.schrijf({"posten": {"per_dag": 4}}, pad)
         oud = sorted((pad.parent / "oud").glob("config-*.json"))
         self.assertEqual(len(oud), 2)
-        self.assertEqual({json.loads(p.read_text())["tekst"]["grootte"] for p in oud}, {"normaal", "groot"})
+        self.assertEqual({ins.laad(p)["tekst"]["grootte"] for p in oud}, {"normaal", "groot"})
 
     def test_17_een_algemene_zernio_sleutel_op_de_mac_telt_niet(self):
         bestand = TMP / "sleutel17" / "zernio-api-key"

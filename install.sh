@@ -32,6 +32,11 @@ else
     || python3 -m pip install --user --break-system-packages --quiet "Pillow>=10" "fonttools>=4"
 fi
 
+if [ "$1" = "--metricool" ]; then
+  stap "cloudflared (zet een video even openbaar, zodat Metricool hem kan ophalen)"
+  if command -v cloudflared >/dev/null 2>&1; then groen "staat er al"; else brew install cloudflared; fi
+fi
+
 stap "Controle"
 python3 -c "import PIL, fontTools, zoneinfo; print('Python-onderdelen: in orde')"
 ffmpeg -hide_banner -version | head -1

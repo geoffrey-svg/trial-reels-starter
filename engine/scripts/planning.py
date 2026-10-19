@@ -38,17 +38,18 @@ def dagtijden(dag, p):
     return [(begin + timedelta(minutes=round(i * stap))).replace(tzinfo=tz) for i in range(aantal)]
 
 
-def plan(posts, accounts, bezet, p, nu, vanaf=None):
+def plan(posts, accounts, bezet, p, nu, vanaf=None, marge=MARGE_MINUTEN):
     """
     posts:    lijst van (post_id, account_id of None); None betekent: om de beurt.
     accounts: de account-ids, in vaste volgorde.
     bezet:    {account_id: [tijden met tijdzone]} van wat er al staat.
+    marge:    zo veel minuten vooruit op zijn vroegst (de koppeling bepaalt dat: Metricool wil een uur).
     Geeft [(post_id, account_id, tijd in UTC)] terug, op volgorde van de posts.
     """
     if not accounts:
         raise PlanFout("Er is nog geen account om op te posten.")
     tz = ZoneInfo(p["tijdzone"])
-    vroegst = nu + timedelta(minutes=MARGE_MINUTEN)
+    vroegst = nu + timedelta(minutes=marge)
     eerste_dag = max(vroegst.astimezone(tz).date(), vanaf or date.min)
     tussen = timedelta(minutes=p["minuten_tussen"])
     # Rekenen in UTC: Python trekt twee tijden met dezelfde tijdzone af op de klok, en dan klopt een uur rond de wissel niet

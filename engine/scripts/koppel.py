@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Welke Instagram-accounts staan in Zernio, en op welke post deze starter.
+Welke Instagram-accounts staan in de koppeling (Zernio of Metricool), en op welke post deze starter.
 
-    python3 engine/scripts/koppel.py                     toon de accounts in Zernio en welke in gebruik zijn
-    python3 engine/scripts/koppel.py --link              een link om een Instagram-account aan Zernio te koppelen
+    python3 engine/scripts/koppel.py                     toon de accounts en welke in gebruik zijn
+    python3 engine/scripts/koppel.py --link              Zernio: een link om een Instagram-account te koppelen
+                                                         (bij Metricool koppel je Instagram in Metricool zelf)
     python3 engine/scripts/koppel.py --gebruik naam ...  post voortaan alleen op deze accounts (gebruikersnamen)
     python3 engine/scripts/koppel.py --erbij naam ...    zet deze accounts erbij; de accounts die er al stonden blijven
 """
@@ -13,8 +14,9 @@ import json
 import shutil
 import sys
 
-from instellingen import MIJN, vrije_naam
-from zernio import Zernio, ZernioFout
+from instellingen import MIJN, InstellingFout, laad, vrije_naam
+from koppelfout import KoppelFout
+from koppeling import maak as maak_koppeling
 
 ACCOUNTS = MIJN / "accounts.json"
 PROFIELNAAM = "Trial Reels"
@@ -28,17 +30,24 @@ def toon(z):
     eigen = {a["id"] for a in in_gebruik()}
     lijst = z.accounts()
     if not lijst:
-        print("Er staat nog geen Instagram-account in Zernio. Maak een koppellink met: koppel.py --link")
+        print(f"Er staat nog geen Instagram-account in {z.naam}. "
+              + ("Maak een koppellink met: koppel.py --link" if z.naam == "Zernio"
+                 else "Maak in Metricool een merk met het Instagram-account erin, en kijk dan opnieuw."))
         return
     for a in lijst:
         volgers = "onbekend" if a["volgers"] is None else int(a["volgers"])
         soort = ("trial reels" if a["volgers"] is not None and a["volgers"] >= 200
                  else "gewone reels (minder dan 200 volgers)" if a["volgers"] is not None else "nog niet te zeggen")
         print(f"@{a['gebruikersnaam']}: {volgers} volgers, {soort}"
-              f"{', IN GEBRUIK' if a['id'] in eigen else ''}{'' if a['gezond'] else ', KOPPELING VERNIEUWEN in Zernio'}")
+              f"{' (merk ' + a['profiel'] + ')' if z.naam == 'Metricool' and a.get('profiel') else ''}"
+              f"{', IN GEBRUIK' if a['id'] in eigen else ''}{'' if a['gezond'] else ', KOPPELING VERNIEUWEN in ' + z.naam}")
 
 
 def link(z):
+    if z.naam != "Zernio":
+        print("Bij Metricool koppel je Instagram in Metricool zelf: maak daar een merk (of open een bestaand merk) en koppel "
+              "het Instagram-account eraan. Daarna toont koppel.py het account en zet je het in gebruik met --gebruik.")
+        return
     profielen = z.profielen()
     profiel = next((p for p in profielen if p.get("name") == PROFIELNAAM), None) or (profielen[0] if profielen else None)
     profiel_id = profiel["_id"] if profiel else z.maak_profiel(PROFIELNAAM)
@@ -57,7 +66,7 @@ def gebruik(z, namen, erbij=False):
         a = alle.get(n.lstrip("@").lower())
         (kies if a else mist).append(a or n)
     if mist:
-        sys.exit(f"Niet gevonden in Zernio: {', '.join(mist)}. Koppel ze eerst (koppel.py --link) of kijk de naam na.")
+        sys.exit(f"Niet gevonden in {z.naam}: {', '.join(mist)}. Koppel ze eerst of kijk de naam na.")
     MIJN.mkdir(parents=True, exist_ok=True)
     if ACCOUNTS.exists():
         shutil.copy2(ACCOUNTS, vrije_naam(MIJN / "oud", "accounts", ".json"))
@@ -73,14 +82,14 @@ def main():
     ap.add_argument("--erbij", nargs="+", metavar="NAAM")
     a = ap.parse_args()
     try:
-        z = Zernio()
+        z = maak_koppeling(laad())
         if a.link:
             link(z)
         elif a.gebruik or a.erbij:
             gebruik(z, a.gebruik or a.erbij, erbij=bool(a.erbij))
         else:
             toon(z)
-    except ZernioFout as e:
+    except (KoppelFout, InstellingFout) as e:
         sys.exit(str(e))
 
 

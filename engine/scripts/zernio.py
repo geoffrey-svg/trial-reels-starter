@@ -20,6 +20,7 @@ nooit uit dit project. Een algemene ZERNIO_API_KEY op de Mac (van een ander proj
 alleen als er geen bestand is, wordt TRS_ZERNIO_API_KEY gebruikt.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -27,7 +28,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from koppelfout import KoppelFout
 
 BASIS = os.environ.get("TRS_ZERNIO_BASIS", "https://zernio.com/api/v1")
 SLEUTELBESTAND = Path.home() / ".config" / "trial-reels-starter" / "zernio-api-key"
@@ -35,10 +39,7 @@ SLEUTEL_RE = re.compile(r"^sk_[0-9a-f]{64}$")
 TAG = "trial-reels-starter"
 
 
-class ZernioFout(Exception):
-    def __init__(self, bericht, status=None, data=None, tijdelijk=False):
-        super().__init__(bericht)
-        self.status, self.data, self.tijdelijk = status, data, tijdelijk
+ZernioFout = KoppelFout   # dezelfde fout als bij Metricool, zodat de scripts er één keer op letten
 
 
 def lees_sleutel():
@@ -52,6 +53,12 @@ def lees_sleutel():
 
 
 class Zernio:
+    naam = "Zernio"
+    marge_minuten = 20                       # zo ver vooruit plant het voorstel op zijn vroegst
+    min_vooruit_voorstel = timedelta(minutes=5)   # zo ver vooruit moet elke tijd nog liggen als --echt begint
+    min_vooruit = timedelta(minutes=2)       # en zo ver vooruit vlak voor het inplannen van één reel
+    blijvende_media = True                   # een geüploade video blijft bij Zernio staan
+
     def __init__(self, sleutel=None, basis=None, pauze=1.1, slaap=time.sleep):
         self.sleutel = sleutel or lees_sleutel()
         self.basis = (basis or BASIS).rstrip("/")
@@ -136,6 +143,10 @@ class Zernio:
 
     # Video's
 
+    def media(self, map_):
+        """Bij Zernio gaat elke video zelf omhoog; er hoeft niets klaar te staan."""
+        return contextlib.nullcontext()
+
     def upload(self, bestand):
         """Zet een video bij Zernio en geeft het openbare adres terug."""
         bestand = Path(bestand)
@@ -197,9 +208,24 @@ class Zernio:
                 return uit
             pagina += 1
 
-    def post(self, post_id):
+    def post(self, post_id, account=None):
         _, d = self.roep("GET", f"/posts/{urllib.parse.quote(post_id)}")
         return d.get("post") or d
+
+    def bezet(self, account_id):
+        """Wat er op dit account gepland staat of net gepost is: [(post-id, tijd)]. Ook wat de gebruiker zelf in Zernio zette."""
+        eergisteren = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
+        posts = self.posts(account_id=account_id, status="scheduled") + self.posts(account_id=account_id, status="publishing") \
+            + self.posts(account_id=account_id, status="published", vanaf=eergisteren)
+        uit = {}
+        for p in posts:
+            if p.get("status") in ("scheduled", "publishing", "published", "partial") and p.get("scheduledFor"):
+                uit[p["_id"]] = datetime.fromisoformat(p["scheduledFor"].replace("Z", "+00:00"))
+        return list(uit.items())
+
+    def zoek(self, regel):
+        """Een post die een eerdere poging wel maakte maar waarvan het antwoord wegviel: hij draagt de eigen sleutel als tag."""
+        return self.posts(tags=[f"trs-{regel['sleutel']}"])
 
     def cijfers(self, account_id, vanaf):
         """De cijfers van alle reels die via Zernio op dit account gezet zijn, vanaf een datum (JJJJ-MM-DD)."""
