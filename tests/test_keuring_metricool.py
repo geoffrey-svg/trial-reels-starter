@@ -79,6 +79,21 @@ def merk_tijdzone(nep, tz):
     vervang_route(nep, route)
 
 
+def valt_weg(nep):
+    """De volgende POST komt aan maar zijn antwoord niet, en daarna is de agenda drie keer onbereikbaar (terugzoeken lukt
+    in die run dus niet)."""
+    stand = {"post": False, "fout": 0}
+
+    def route(h, pad, q, body):
+        if h.command == "POST" and pad == "/v2/scheduler/posts":
+            stand["post"] = True
+        elif h.command == "GET" and pad == "/v2/scheduler/posts" and stand["post"] and stand["fout"] < 3:
+            stand["fout"] += 1
+            return 503, {"message": "storing"}
+    vervang_route(nep, route)
+    nep.storing = [(r"POST /api/v2/scheduler/posts$", "slik")]
+
+
 def eigen_post(nep, nr, blog, moment, netwerk="instagram", tekst="Eigen post"):
     nep.posts[str(nr)] = {"id": nr, "_blog": blog, "text": tekst, "media": [], "draft": False,
                           "publicationDate": {"dateTime": moment.astimezone(AMS).strftime("%Y-%m-%dT%H:%M:%S"), "timezone": "Europe/Amsterdam"},
@@ -150,8 +165,8 @@ class Basis(unittest.TestCase):
         return sum(1 for p in self.nep.posts.values() if p["text"].strip() == tekst.strip())
 
     def antwoord_valt_weg(self):
-        """--echt maakt reel 01 aan, maar het antwoord van Metricool komt niet terug."""
-        self.nep.storing = [(r"POST /api/v2/scheduler/posts$", "slik")]
+        """--echt maakt reel 01 aan, maar het antwoord van Metricool komt niet terug, en terugzoeken lukt in die run ook niet."""
+        valt_weg(self.nep)
         with self.assertRaises(KoppelFout), redirect_stdout(io.StringIO()):
             pr.echt(self.map_, mr.lees_ronde(self.map_, bron=False), cfg(), self.z)
 
@@ -291,9 +306,13 @@ class TestMiddel(Basis):
         try:
             zz = self.zernio(nz)
             pr.ACCOUNTS.write_text(json.dumps([{"id": "a" * 24, "gebruikersnaam": "mijn_merk"}]))
-            with self.assertRaisesRegex(PlanFout, "eerder via Metricool"), redirect_stdout(io.StringIO()):
-                self.voorstel(z=zz)
-            self.assertEqual(nz.posts, {})
+            with redirect_stdout(io.StringIO()):
+                v = self.voorstel(z=zz)
+            self.assertEqual(v["elders"], {"01": "Metricool"}, "alleen die ene reel wacht, de rest gaat gewoon")
+            self.assertEqual([p["id"] for p in v["posts"]], ["02", "03"])
+            self.echt(z=zz)
+            self.assertEqual(sorted(p["content"] for p in nz.posts.values()), ["Caption 2", "Caption 3"])
+            self.assertEqual(self.tel_caption("Caption 1"), 1)
         finally:
             nz.stop()
 
@@ -382,6 +401,14 @@ class TestLicht(Basis):
         self.assertEqual(bewaard["tekst"], {"font": "Anton-Regular.ttf", "positie": "onder"})
         self.assertEqual(bewaard["posten"]["per_dag"], 2)
         self.assertEqual(bewaard["winners"], {"factor": 5})
+
+    def test_l8_twee_ongeldige_velden_nemen_de_rest_ook_niet_mee(self):
+        pad = basis.TMP / "keuring-l8b" / "config.json"
+        pad.parent.mkdir(parents=True, exist_ok=True)
+        pad.write_text(json.dumps({"versie": 1, "tekst": {"font": "Bestaat-Niet.ttf", "kleur_tekst": "rood", "positie": "onder"}}))
+        goed, weg = ins.lees_eigen(pad)
+        self.assertEqual(goed["tekst"], {"positie": "onder"})
+        self.assertEqual(sorted(weg), ["tekst.font", "tekst.kleur_tekst"])
 
     def test_l9_een_merk_zonder_instagramnaam_krijgt_zijn_nummer(self):
         self.nep.merken = [{"id": 555, "label": "Vlag", "instagram": True}, {"id": 556, "label": "Nummer", "instagram": 17841400000001}]
@@ -474,3 +501,270 @@ class TestTunnelEnSleutel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def verleden(nep, post_id, uren_terug, map_):
+    """Zet een Metricool-post op een moment in het verleden (alsof zijn tijd voorbij is), en het boek mee."""
+    t = (datetime.now(AMS) - timedelta(hours=uren_terug)).replace(microsecond=0)
+    nep.posts[str(post_id)]["publicationDate"]["dateTime"] = t.strftime("%Y-%m-%dT%H:%M:%S")
+    pad = map_ / "ingepland.json"
+    boek = json.loads(pad.read_text())
+    for r in boek["posts"].values():
+        if r.get("zernio_id") == str(post_id):
+            r["tijd"] = t.astimezone(timezone.utc).isoformat()
+    pad.write_text(json.dumps(boek))
+
+
+@contextlib.contextmanager
+def tussenstation_zonder_lengte(poort):
+    """Een tunnel die bij HEAD geen Content-Length doorgeeft (dat mag een tussenstation); GET werkt gewoon."""
+    import http.client
+    import http.server
+    import threading
+
+    class P(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _door(self, met_lijf):
+            c = http.client.HTTPConnection("127.0.0.1", poort, timeout=10)
+            c.request(self.command, self.path)
+            r = c.getresponse()
+            lijf = r.read() if met_lijf else b""
+            self.send_response(r.status)
+            for k, v in r.getheaders():
+                if k.lower() not in ("content-length", "connection", "transfer-encoding"):
+                    self.send_header(k, v)
+            if met_lijf:
+                self.send_header("Content-Length", str(len(lijf)))
+            self.end_headers()
+            self.wfile.write(lijf)
+            c.close()
+
+        def do_GET(self):
+            self._door(True)
+
+        def do_HEAD(self):
+            self._door(False)
+
+    s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), P)
+    threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{s.server_address[1]}"
+    finally:
+        s.shutdown()
+        s.server_close()
+
+
+class TestHerkeuring(Basis):
+    """De tweede keuring (19 okt 2026): wat de eerste reparatie zelf nog fout deed."""
+
+    def voeg_reel_toe(self, pid, caption):
+        ronde = json.loads((self.map_ / "ronde.json").read_text())
+        p = {"id": pid, "video": f"weg/{pid}.mp4", "tekst": f"Tekst {pid}", "caption": caption}
+        ronde["posts"].append(p)
+        (self.map_ / "klaar" / f"{pid}.mp4").write_bytes(b"\0" * 2000 + pid.encode())
+        (self.map_ / "klaar" / f"{pid}.json").write_text(json.dumps(mr.vingerafdruk(p, cfg())))
+        (self.map_ / "ronde.json").write_text(json.dumps(ronde))
+
+    def alles_online_en_voorbij(self):
+        self.voorstel()
+        self.echt()
+        b = self.boek()
+        for i, (pid, r) in enumerate(sorted(b.items())):
+            verleden(self.nep, r["zernio_id"], 80 - i, self.map_)
+            self.nep.publiceer(r["zernio_id"], f"CODE{pid}")
+        return b
+
+    def test_n1_verwijderd_na_zijn_tijd_gaat_niet_opnieuw(self):
+        b = self.alles_online_en_voorbij()          # geen --stand: in het boek staat nog 'pending'
+        del self.nep.posts[b["01"]["zernio_id"]]     # de gebruiker ruimt zijn planner op
+        self.nep.posts[b["02"]["zernio_id"]]["deleted"] = True
+        self.voeg_reel_toe("04", "Caption 4")
+        v = self.voorstel()
+        self.assertEqual(v["opnieuw"], [])
+        self.assertEqual([p["id"] for p in v["posts"]], ["04"])
+        self.echt()
+        self.assertEqual(self.tel_caption("Caption 1"), 0, "01 stond al op Instagram en komt er niet nog eens")
+        st = self.stand()
+        self.assertIn("kan al online staan", st)
+
+    def test_n1_zernio_verwijderd_na_zijn_tijd_gaat_niet_opnieuw(self):
+        nz = NepZernio()
+        try:
+            zz = self.zernio(nz)
+            pr.ACCOUNTS.write_text(json.dumps([{"id": "a" * 24, "gebruikersnaam": "mijn_merk"}]))
+            with redirect_stdout(io.StringIO()):
+                self.voorstel(z=zz)
+            self.echt(z=zz)
+            b = self.boek()
+            for pid, r in b.items():
+                p = nz.posts[r["zernio_id"]]
+                p["scheduledFor"] = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                r["tijd"] = p["scheduledFor"].replace("Z", "+00:00")
+                p["status"] = "published"
+                p["platforms"][0].update(status="published", platformPostUrl=f"https://www.instagram.com/reel/Z{pid}/")
+            pr.schrijf_json(self.map_ / "ingepland.json", {"posts": b})
+            nz.posts.pop(b["01"]["zernio_id"])
+            self.voeg_reel_toe("04", "Caption 4")
+            with redirect_stdout(io.StringIO()):
+                v = self.voorstel(z=zz)
+            self.assertEqual(v["opnieuw"], [])
+            self.assertEqual([p["id"] for p in v["posts"]], ["04"])
+        finally:
+            nz.stop()
+
+    def test_n2_na_nakijken_bij_de_oude_koppeling_mag_de_nieuwe_wel(self):
+        nz = NepZernio()
+        try:
+            zz = self.zernio(nz)
+            pr.ACCOUNTS.write_text(json.dumps([{"id": "a" * 24, "gebruikersnaam": "mijn_merk"}]))
+            with redirect_stdout(io.StringIO()):
+                self.voorstel(z=zz)
+            nz.storing = [(r"POST /api/v1/media/presign$", 400)]      # de upload van 01 lukt niet; Zernio krijgt niets
+            with self.assertRaises(KoppelFout), redirect_stdout(io.StringIO()):
+                pr.echt(self.map_, mr.lees_ronde(self.map_, bron=False), cfg(), zz)
+            pr.ACCOUNTS.write_text(json.dumps([{"id": "111", "gebruikersnaam": "mijn_merk"}]))
+            v = self.voorstel()
+            self.assertEqual(v["elders"], {"01": "Zernio"})
+            self.assertEqual([p["id"] for p in v["posts"]], ["02", "03"])
+            pr.ACCOUNTS.write_text(json.dumps([{"id": "a" * 24, "gebruikersnaam": "mijn_merk"}]))
+            with redirect_stdout(io.StringIO()):
+                self.voorstel(z=zz)                                    # Zernio kijkt: niets
+            pr.ACCOUNTS.write_text(json.dumps([{"id": "111", "gebruikersnaam": "mijn_merk"}]))
+            v = self.voorstel()
+            self.assertEqual(v["elders"], {})
+            self.assertEqual([p["id"] for p in v["posts"]], ["01", "02", "03"])
+        finally:
+            nz.stop()
+
+    def test_n2_vrijgeven_als_de_oude_koppeling_er_niet_meer_is(self):
+        self.voorstel()
+        self.antwoord_valt_weg()
+        self.nep.posts.clear()           # de gebruiker keek in Metricool: 01 staat er niet
+        with self.assertRaisesRegex(PlanFout, "niet half ingepland"), redirect_stdout(io.StringIO()):
+            pr.vrijgeven(self.map_, ["02"])
+        with redirect_stdout(io.StringIO()):
+            pr.vrijgeven(self.map_, ["01"])
+        self.assertTrue(self.boek()["01"]["nagekeken"])
+
+    def test_n3_teruggevonden_post_zonder_video_heet_mislukt(self):
+        self.voorstel()
+        self.nep.kopie_lukt = False
+        self.antwoord_valt_weg()                     # 01 staat bij Metricool met het tunneladres; het antwoord viel weg
+        self.nep.kopie_lukt = True
+        uit = self.echt()
+        self.assertIn("al bij Metricool: 01", uit)
+        self.assertIn("MISLUKT: 01", uit)
+        self.assertIn("video kwam niet aan", self.boek()["01"]["fout"])
+        self.assertIn("1 mislukt bij het inplannen", self.stand())
+
+    def test_n3_teruggevonden_gewone_reel_heet_mislukt(self):
+        eerste = []
+
+        def als_reel(h, pad, q, body):
+            if h.command == "POST" and pad == "/v2/scheduler/posts" and body and not eerste:
+                eerste.append(1)
+                body["instagramData"] = {**body["instagramData"], "type": "REEL"}
+        vervang_route(self.nep, als_reel)
+        self.voorstel()
+        self.antwoord_valt_weg()
+        uit = self.echt()
+        self.assertIn("MISLUKT: 01", uit)
+        self.assertIn("gewone reel", self.boek()["01"]["fout"])
+
+    def test_n3_terughalen_mislukt_dan_controle_bij_de_volgende_keer(self):
+        self.voorstel()
+        self.nep.kopie_lukt = False
+        self.nep.storing = [(r"GET /api/v2/scheduler/posts/\d+$", 503)] * 3
+        with self.assertRaises(KoppelFout), redirect_stdout(io.StringIO()):
+            pr.echt(self.map_, mr.lees_ronde(self.map_, bron=False), cfg(), self.z)
+        self.nep.kopie_lukt = True
+        self.assertIn("MISLUKT: 01", self.echt())
+
+    def test_n3_geen_antwoord_op_de_post_eerst_terugzoeken(self):
+        self.voorstel()
+        self.nep.storing = [(r"POST /api/v2/scheduler/posts$", "slik")]
+        self.assertIn("3 reels ingepland", self.echt(), "teruggevonden in dezelfde run, niet opnieuw gemaakt")
+        self.assertEqual(self.tel_caption("Caption 1"), 1)
+
+    def test_n4_een_tunnel_zonder_lengte_bij_head_werkt(self):
+        self.z = self.metricool(tunnel=tussenstation_zonder_lengte)
+        self.voorstel()
+        self.assertIn("3 reels ingepland", self.echt())
+        self.assertTrue(all(p["media"][0].startswith("https://static.metricool.com/") for p in self.nep.posts.values()))
+
+    def test_n5_zelf_opnieuw_gezet_in_metricool_gaat_niet_nog_eens(self):
+        self.voorstel()
+        self.echt()
+        b = self.boek()
+        oud = self.nep.posts[b["01"]["zernio_id"]]
+        verleden(self.nep, b["01"]["zernio_id"], 1, self.map_)
+        self.nep.publiceer(b["01"]["zernio_id"], None, fout="Instagram gaf een fout")
+        t = datetime.now(AMS) + timedelta(days=2, hours=3)
+        self.nep.posts["777777"] = {**json.loads(json.dumps(oud)), "id": 777777,   # door de gebruiker: nieuw id, zelfde caption
+                                    "publicationDate": {"dateTime": t.strftime("%Y-%m-%dT%H:%M:%S"), "timezone": "Europe/Amsterdam"},
+                                    "providers": [{"network": "instagram", "status": "PENDING"}]}
+        self.voeg_reel_toe("04", "Caption 4")
+        v = self.voorstel()
+        self.assertEqual(v["zelf_opnieuw"], ["01"])
+        self.assertEqual(v["opnieuw"], [])
+        self.echt()
+        self.assertEqual(sum(1 for p in self.nep.posts.values() if p["text"] == "Caption 1" and p["providers"][0]["status"] == "PENDING"), 1)
+
+    def test_n5_mislukt_zonder_eigen_herstel_gaat_wel_opnieuw(self):
+        self.voorstel()
+        self.echt()
+        b = self.boek()
+        verleden(self.nep, b["01"]["zernio_id"], 1, self.map_)
+        self.nep.publiceer(b["01"]["zernio_id"], None, fout="Instagram gaf een fout")
+        v = self.voorstel()
+        self.assertEqual(v["opnieuw"], ["01"])
+
+    def test_n6_een_verzette_reel_laat_echt_niet_rondgaan(self):
+        self.voorstel()
+        self.echt()
+        b = self.boek()
+        p02 = self.nep.posts[b["02"]["zernio_id"]]
+        oud = datetime.fromisoformat(p02["publicationDate"]["dateTime"])
+        p02["publicationDate"]["dateTime"] = (oud + timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%S")
+        self.voeg_reel_toe("04", "Caption 4")
+        self.voorstel()
+        self.assertIn("1 reels ingepland", self.echt())
+        nieuw = datetime.fromisoformat(self.boek()["02"]["tijd"]).astimezone(AMS).replace(tzinfo=None)
+        self.assertEqual(nieuw, oud + timedelta(hours=6), "het boek kent de nieuwe tijd")
+
+    def test_n7_velden_die_alleen_samen_kloppen_blijven(self):
+        pad = basis.TMP / "keuring-n7" / "config.json"
+        pad.parent.mkdir(parents=True, exist_ok=True)
+        pad.write_text(json.dumps({"versie": 1, "posten": {"per_dag": 99, "van": 22, "tot": 24, "minuten_tussen": 60,
+                                                           "tijdzone": "Europe/Amsterdam", "doorzetten": "zelf"}}))
+        goed, weg = ins.lees_eigen(pad)
+        self.assertEqual(weg, ["posten.per_dag"])
+        self.assertEqual((goed["posten"]["van"], goed["posten"]["tot"]), (22, 24))
+
+    def test_n8_een_kapot_boek_van_een_andere_ronde_stopt_het_voorstel(self):
+        ander = self.maak_ronde("keuring-kapot")
+        (ander / "ingepland.json").write_text('{"posts": {"01": {"zernio_id": "1"')
+        with self.assertRaisesRegex(PlanFout, "beschadigd"):
+            self.voorstel()
+        (ander / "ingepland.json").write_text(json.dumps({"posts": ["kapot"]}))
+        with self.assertRaisesRegex(PlanFout, "vorm"):
+            self.voorstel()
+        self.assertEqual(self.nep.posts, {})
+
+    def test_n9_bewaard_ook_bij_een_kapot_koppelbestand(self):
+        import site
+        nz = NepZernio()
+        try:
+            thuis = basis.TMP / "thuis-n9"
+            (thuis / ".config" / "trial-reels-starter").mkdir(parents=True, exist_ok=True)
+            (thuis / ".config" / "trial-reels-starter" / "zernio-api-key").write_text(SLEUTEL + "\n")
+            koppeling.BESTAND.write_text("{kapot")
+            env = {**os.environ, "HOME": str(thuis), "PYTHONUSERBASE": site.getuserbase(), "TRS_ZERNIO_BASIS": nz.basis}
+            r = subprocess.run([sys.executable, str(SCRIPTS / "sleutel.py"), "--bewaard", "zernio"], input="",
+                               capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(koppeling.lees()["soort"], "zernio")
+        finally:
+            nz.stop()

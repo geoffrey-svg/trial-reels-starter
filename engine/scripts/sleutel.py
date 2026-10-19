@@ -39,13 +39,17 @@ def bewaar(bestand, waarde):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--metricool", action="store_true", help="de token van Metricool in plaats van een Zernio-sleutel")
-    ap.add_argument("--user", help="het Metricool-gebruikersnummer (userId), te vinden bij de API-instellingen in Metricool")
+    ap.add_argument("--user", help="het Metricool-gebruikersnummer (userId): het nummer na userId= in de adresbalk als je in "
+                                   "Metricool een merk opent")
     ap.add_argument("--zelf", action="store_true", help="geen koppeling: de gebruiker post zelf met een ander programma")
     ap.add_argument("--bewaard", choices=["zernio", "metricool"], help="wissel naar deze koppeling met de sleutel of token die hier al staat")
     a = ap.parse_args()
     if a.bewaard:
         try:
-            vorige = koppeling.lees()
+            try:
+                vorige = koppeling.lees()
+            except KoppelFout:
+                vorige = {}          # een kapot bestand: de keuze die nu volgt, zet het weer goed
             if a.bewaard == "zernio":
                 from zernio import Zernio
                 aantal = len(Zernio().accounts())
@@ -68,7 +72,8 @@ def main():
     if a.metricool:
         from metricool import TOKENBESTAND, Metricool
         if not a.user or not a.user.isdigit():
-            sys.exit("Geef ook het Metricool-gebruikersnummer mee: --user 1234567 (alleen cijfers). Het staat in Metricool bij de API-instellingen.")
+            sys.exit("Geef ook het Metricool-gebruikersnummer mee: --user 1234567 (alleen cijfers). Open in Metricool een merk: het "
+                     "nummer na userId= in de adresbalk is het gebruikersnummer.")
         if not re.fullmatch(r"[A-Za-z0-9_\-]{16,200}", waarde):
             sys.exit("Dit lijkt geen Metricool-token. Kopieer hem opnieuw uit Metricool (instellingen, API).")
         try:

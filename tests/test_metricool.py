@@ -137,7 +137,9 @@ class TestMetricool(unittest.TestCase):
 
     def test_weggevallen_antwoord_geeft_geen_tweede_post(self):
         self.voorstel()
-        self.nep.storing = [(r"POST /api/v2/scheduler/posts$", "slik")]
+        # Het antwoord valt weg, en terugzoeken lukt in die run ook niet (Metricool even onbereikbaar)
+        from test_keuring_metricool import valt_weg
+        valt_weg(self.nep)
         with self.assertRaises(KoppelFout), redirect_stdout(io.StringIO()):
             pr.echt(self.map_, self.ronde(), cfg(), self.z)
         self.assertEqual(len(self.nep.posts), 1, "Metricool kreeg hem wel")

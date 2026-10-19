@@ -20,7 +20,8 @@ def lees():
     try:
         k = json.loads(BESTAND.read_text(encoding="utf-8")) if BESTAND.exists() else {}
     except json.JSONDecodeError:
-        raise KoppelFout(f"{BESTAND} is geen geldig bestand. Zet de koppeling opnieuw met sleutel.py.")
+        raise KoppelFout(f"{BESTAND} is geen geldig bestand. Zet de koppeling opnieuw met sleutel.py (met --bewaard zernio of "
+                         "--bewaard metricool als de sleutel of token hier al staat; dan is er geen nieuwe nodig).")
     k.setdefault("soort", "zernio")
     if k["soort"] not in SOORTEN:
         raise KoppelFout(f"Onbekende koppeling {k['soort']!r} in {BESTAND}.")

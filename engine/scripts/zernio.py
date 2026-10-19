@@ -212,16 +212,24 @@ class Zernio:
         _, d = self.roep("GET", f"/posts/{urllib.parse.quote(post_id)}")
         return d.get("post") or d
 
-    def bezet(self, account_id):
-        """Wat er op dit account gepland staat of net gepost is: [(post-id, tijd)]. Ook wat de gebruiker zelf in Zernio zette."""
+    def agenda(self, account_id):
+        """Wat er op dit account gepland staat of net gepost is: [(post-id, tijd, caption)]. Ook wat de gebruiker zelf in
+        Zernio zette."""
         eergisteren = (datetime.now(timezone.utc) - timedelta(days=2)).date().isoformat()
         posts = self.posts(account_id=account_id, status="scheduled") + self.posts(account_id=account_id, status="publishing") \
             + self.posts(account_id=account_id, status="published", vanaf=eergisteren)
         uit = {}
         for p in posts:
             if p.get("status") in ("scheduled", "publishing", "published", "partial") and p.get("scheduledFor"):
-                uit[p["_id"]] = datetime.fromisoformat(p["scheduledFor"].replace("Z", "+00:00"))
-        return list(uit.items())
+                uit[p["_id"]] = (p["_id"], datetime.fromisoformat(p["scheduledFor"].replace("Z", "+00:00")), p.get("content") or "")
+        return list(uit.values())
+
+    def bezet(self, account_id):
+        return [(i, t) for i, t, _ in self.agenda(account_id)]
+
+    def controleer(self, post, *, tijd, trial, caption):
+        """Zernio krijgt de post met een eigen sleutel en geeft hem terug zoals gestuurd; hier valt niets na te kijken."""
+        return None
 
     def zoek(self, regel):
         """Een post die een eerdere poging wel maakte maar waarvan het antwoord wegviel: hij draagt de eigen sleutel als tag."""

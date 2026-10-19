@@ -266,16 +266,19 @@ class Metricool:
             d = e
         return list(uit.values())
 
-    def bezet(self, account_id):
-        """Wat er op dit Instagram-account gepland staat of net gepost is, over alle merken met dat account. Alleen
-        Instagram telt: een LinkedIn- of Facebook-post in hetzelfde merk niet."""
+    def agenda(self, account_id):
+        """Wat er op dit Instagram-account gepland staat of net gepost is, over alle merken met dat account:
+        [(post-id, tijd, caption)]. Alleen Instagram telt: een LinkedIn- of Facebook-post in hetzelfde merk niet."""
         nu = datetime.now(timezone.utc)
         uit = {}
         for blog in self._zelfde_instagram(account_id):
             for p in self._planning(blog, nu - timedelta(days=2), nu + timedelta(days=120)):
                 if p["instagram"] and not p["draft"] and p["status"] in ("scheduled", "published"):
-                    uit[p["_id"]] = datetime.fromisoformat(p["scheduledFor"])
-        return list(uit.items())
+                    uit[p["_id"]] = (p["_id"], datetime.fromisoformat(p["scheduledFor"]), p["text"])
+        return list(uit.values())
+
+    def bezet(self, account_id):
+        return [(i, t) for i, t, _ in self.agenda(account_id)]
 
     def _vind(self, account_id, tijd, caption):
         """Instagram-posts op deze minuut met deze caption, op elk merk met hetzelfde Instagram-account."""
@@ -343,7 +346,8 @@ class Metricool:
         for poging in range(1, 6):
             try:
                 with urllib.request.urlopen(urllib.request.Request(url, method="HEAD"), timeout=20) as r:
-                    if r.status == 200 and int(r.headers.get("Content-Length") or -1) == bestand.stat().st_size:
+                    # Een tussenstation (Cloudflare) mag de lengte bij HEAD weglaten of op 0 zetten
+                    if r.status == 200 and int(r.headers.get("Content-Length") or 0) in (0, bestand.stat().st_size):
                         return
             except (OSError, ValueError):
                 pass
@@ -372,16 +376,20 @@ class Metricool:
         nieuw_id = None
         for poging in range(1, 4):
             try:
-                _, d = self.roep("POST", "/v2/scheduler/posts", {"blogId": account_id}, body, pogingen=1)
+                # Ruime tijd: Metricool kopieert de video terwijl hij de post maakt
+                _, d = self.roep("POST", "/v2/scheduler/posts", {"blogId": account_id}, body, pogingen=1, timeout=300)
             except KoppelFout as e:
-                # Een kale 404 kwam in de metingen terwijl de tunnel nog opstartte: eerst kijken of hij er toch staat
-                if e.status != 404 or poging == 3:
+                # Een kale 404 kwam in de metingen terwijl de tunnel nog opstartte; bij geen antwoord of een storing kan
+                # de post er toch staan. Daarom eerst kijken, en alleen na een 404 opnieuw proberen.
+                if not (e.status == 404 or e.tijdelijk) or poging == 3:
                     raise
-                self.slaap(30)
+                self.slaap(30 if e.status == 404 else 60)
                 al = self._vind(account_id, tijd, caption)
                 if al:
                     nieuw_id = al[0]["_id"]
                     break
+                if e.status != 404:
+                    raise
                 continue
             nieuw = d.get("data", d) if isinstance(d, dict) else {}
             nieuw_id = nieuw.get("id") if isinstance(nieuw, dict) else None
@@ -389,6 +397,16 @@ class Metricool:
                 raise KoppelFout(f"Metricool gaf geen post terug: {json.dumps(d)[:200]}")
             break
         post = self.post(nieuw_id, account_id)
+        fout = self.controleer(post, tijd=tijd, trial=trial, caption=caption)
+        if fout:
+            post["status"] = "failed"
+            post["platforms"][0].update(status="failed", errorMessage=fout)
+            return 207, post
+        return 201, post
+
+    def controleer(self, post, *, tijd, trial, caption):
+        """Staat de post bij Metricool zoals bedoeld? Geeft de reden als dat niet zo is, anders None. Ook voor een post die
+        na een weggevallen antwoord wordt teruggevonden."""
         fout = None
         if not any("static.metricool.com" in str(m) for m in post["media"]):
             fout = "De video kwam niet aan bij Metricool."
@@ -398,12 +416,7 @@ class Metricool:
             fout = "Metricool bewaarde hem als " + ("gewone reel, die ook de volgers zien." if trial else "trial reel.")
         elif post["text"].strip() != (caption or "").strip():
             fout = "Metricool bewaarde een andere caption."
-        if fout:
-            post["status"] = "failed"
-            post["platforms"][0].update(status="failed", errorMessage=f"{fout} Stop deze post in Metricool; een nieuw voorstel "
-                                                                      "neemt de reel daarna opnieuw mee.")
-            return 207, post
-        return 201, post
+        return f"{fout} Stop deze post in Metricool; een nieuw voorstel neemt de reel daarna opnieuw mee." if fout else None
 
     # Cijfers
 

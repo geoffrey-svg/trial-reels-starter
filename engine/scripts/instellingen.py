@@ -201,6 +201,12 @@ def lees_eigen(pad=CONFIG):
         elif past({**goed, blok: waarden}):
             goed[blok] = dict(waarden)
         else:
+            # Eerst: is er één veld dat alles laat vallen? Dan alleen dat weg (van en tot kloppen soms alleen samen)
+            een = next((k for k in waarden if past({**goed, blok: {x: v for x, v in waarden.items() if x != k}})), None)
+            if een is not None:
+                goed[blok] = {x: v for x, v in waarden.items() if x != een}
+                weg.append(f"{blok}.{een}")
+                continue
             goed[blok] = {}
             for k, v in waarden.items():
                 if past({**goed, blok: {**goed[blok], k: v}}):

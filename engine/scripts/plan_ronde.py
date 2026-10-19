@@ -5,6 +5,9 @@ Plant de reels van een ronde in als trial reel, via de koppeling van de gebruike
     python3 engine/scripts/plan_ronde.py <ronde>             voorstel: wanneer gaat elke reel, verandert niets
     python3 engine/scripts/plan_ronde.py <ronde> --echt      zet het voorstel echt klaar (alleen na een ja van de gebruiker)
     python3 engine/scripts/plan_ronde.py <ronde> --stand     hoe staat het: gepland, online of mislukt
+    python3 engine/scripts/plan_ronde.py <ronde> --vrijgeven <id> ...
+                                                             een reel die half via een vorige koppeling ging en daar
+                                                             volgens de gebruiker niet staat, weer laten inplannen
 
 Opties bij het voorstel:
     --soort auto|trial|gewoon   auto (standaard): trial reel vanaf 200 volgers, daaronder een gewone reel
@@ -44,7 +47,27 @@ TRIAL_VANAF = 200   # Instagram Help Center: trial reels vanaf 200 volgers op ee
 
 
 def lees_json(pad, leeg):
-    return json.loads(Path(pad).read_text(encoding="utf-8")) if Path(pad).exists() else leeg
+    pad = Path(pad)
+    if not pad.exists():
+        return leeg
+    try:
+        return json.loads(pad.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise PlanFout(f"{pad} is beschadigd ({e}). Daardoor weet de starter niet zeker wat er al klaarstaat, dus er wordt "
+                       "niets ingepland. Laat het bestand nakijken en herstellen; gooi het niet weg.")
+
+
+def lees_boek(pad):
+    """Het boek van een ronde: wat er al bij een koppeling staat. Een andere vorm is een fout, net als een kapot bestand."""
+    boek = lees_json(pad, {"posts": {}})
+    if not (isinstance(boek, dict) and isinstance(boek.get("posts"), dict) and all(isinstance(r, dict) for r in boek["posts"].values())):
+        raise PlanFout(f"{pad} heeft een vorm die de starter niet kent. Daardoor weet hij niet zeker wat er al klaarstaat, dus er "
+                       "wordt niets ingepland. Laat het bestand nakijken en herstellen; gooi het niet weg.")
+    return boek
+
+
+def alle_boeken():
+    return [(pad, lees_boek(pad)) for pad in sorted((MIJN / "rondes").glob("*/ingepland.json"))]
 
 
 def schrijf_json(pad, data):
@@ -72,18 +95,14 @@ def koppeling_van(regel):
 
 def bezette_tijden(z, agenda, namen, behalve=()):
     """Wat er al gepland of net gepost is op elk account: van deze starter én wat de gebruiker zelf in Zernio of
-    Metricool zette (agenda: {account: [(post-id, tijd)]} van z.bezet). De posts in behalve tellen niet.
+    Metricool zette (agenda: {account: [(post-id, tijd, caption)]} van z.agenda). De posts in behalve tellen niet.
     Reels van deze starter via een andere koppeling (van voor een wissel) ziet de koppeling van nu niet; die tellen
     mee op het account met dezelfde Instagram-naam."""
-    bezet = {a: [t for pid, t in lijst if pid not in behalve] for a, lijst in agenda.items()}
+    bezet = {a: [item[1] for item in lijst if item[0] not in behalve] for a, lijst in agenda.items()}
     op_naam = {str(n).lower(): a for a, n in namen.items()}
     grens = datetime.now(timezone.utc) - timedelta(days=2)
-    for boek in sorted((MIJN / "rondes").glob("*/ingepland.json")):
-        try:
-            regels = lees_json(boek, {}).get("posts", {}).values()
-        except (OSError, json.JSONDecodeError):
-            continue
-        for r in regels:
+    for _, boek in alle_boeken():
+        for r in boek["posts"].values():
             a = op_naam.get(str(r.get("gebruikersnaam") or "").lower())
             if (a in bezet and r.get("zernio_id") and r.get("tijd") and koppeling_van(r) != z.naam
                     and r.get("status") not in ("failed", "cancelled", "weg") and tijd_van(r["tijd"]) > grens):
@@ -91,12 +110,28 @@ def bezette_tijden(z, agenda, namen, behalve=()):
     return bezet
 
 
+def eigen_ids_overal():
+    """Elk post-id dat deze starter ooit kreeg, in alle rondes (ook eerdere pogingen)."""
+    ids = set()
+    for _, boek in alle_boeken():
+        for r in boek["posts"].values():
+            ids.update(x["zernio_id"] for x in [r] + r.get("eerder", []) if isinstance(x, dict) and x.get("zernio_id"))
+    return ids
+
+
 def opnieuw_vrij(z, boek, agenda):
-    """Reels uit het boek die niet meer online gaan: gestopt in de koppeling, mislukt, of een concept. Die mogen opnieuw
-    in een voorstel (met een nieuwe eigen sleutel); wat er stond, gaat naar 'eerder'. Alleen als de koppeling dat zelf
-    bevestigt: een post die er nog staat, blijft staan. Geeft de ids terug."""
-    in_agenda = {pid for lijst in agenda.values() for pid, _ in lijst}
-    vrij = []
+    """Reels uit het boek die zeker niet online staan of komen, mogen opnieuw in een voorstel (met een nieuwe eigen
+    sleutel); wat er stond, gaat naar 'eerder'. Zeker is:
+    1. de koppeling zegt dat hij mislukt is, of
+    2. hij is gestopt, weg of een concept terwijl zijn tijd nog moet komen. Is de tijd voorbij, dan kan hij al online
+       staan (een opgeruimde planner zegt niets over Instagram): dan blijft hij staan.
+    Staat op hetzelfde account al een andere post met dezelfde caption die niet van de starter is, dan zette de
+    gebruiker hem zelf opnieuw: dan ook niet. De opgehaalde stand gaat altijd in het boek.
+    Geeft (vrij, zelf opnieuw gezet) terug."""
+    in_agenda = {item[0] for lijst in agenda.values() for item in lijst}
+    van_starter = None
+    nu = datetime.now(timezone.utc)
+    vrij, zelf = [], []
     for pid, regel in list(boek["posts"].items()):
         if (not regel.get("zernio_id") or koppeling_van(regel) != z.naam or regel.get("status") == "published"
                 or regel["zernio_id"] in in_agenda):
@@ -108,13 +143,32 @@ def opnieuw_vrij(z, boek, agenda):
             if e.status != 404:
                 raise
             status = "weg"
-        if status in ("failed", "cancelled", "weg", "concept"):
-            oud = {k: v for k, v in regel.items() if k != "eerder"}
-            boek["posts"][pid] = {"eerder": regel.get("eerder", []) + [{**oud, "status": status}]}
-            vrij.append(pid)
-        else:
-            regel["status"] = status
-    return vrij
+        regel["status"] = status
+        nog_niet = bool(regel.get("tijd")) and tijd_van(regel["tijd"]) > nu
+        if not (status == "failed" or (status in ("cancelled", "weg", "concept") and nog_niet)):
+            continue
+        account = regel.get("account")
+        lijst = agenda[account] if account in agenda else z.agenda(account)
+        van_starter = eigen_ids_overal() if van_starter is None else van_starter
+        if any(i not in van_starter and (tekst or "").strip() == (regel.get("caption") or "").strip() for i, _, tekst in lijst):
+            zelf.append(pid)
+            continue
+        oud = {k: v for k, v in regel.items() if k != "eerder"}
+        boek["posts"][pid] = {"eerder": regel.get("eerder", []) + [oud]}
+        vrij.append(pid)
+    return vrij, zelf
+
+
+def werk_tijden_bij(z, boek, agenda):
+    """Verzette de gebruiker een reel in de koppeling, dan krijgt het boek de tijd van nu. Geeft True als er iets veranderde."""
+    tijden = {item[0]: item[1] for lijst in agenda.values() for item in lijst}
+    anders = False
+    for regel in boek["posts"].values():
+        t = tijden.get(regel.get("zernio_id")) if koppeling_van(regel) == z.naam else None
+        if t and (not regel.get("tijd") or tijd_van(regel["tijd"]) != t):
+            regel["tijd"] = t.astimezone(timezone.utc).isoformat()
+            anders = True
+    return anders
 
 
 def kies_soort(account, soort, koppeling="Zernio"):
@@ -155,9 +209,17 @@ def zoek_verweesd(z, boek):
     for pid, regel in boek["posts"].items():
         if regel.get("sleutel") and not regel.get("zernio_id") and koppeling_van(regel) == z.naam:
             al = z.zoek(regel)
-            if al:
-                neem_over(regel, al[0])
-                gevonden.append(pid)
+            if not al:
+                regel["nagekeken"] = True      # niet bij deze koppeling: een andere koppeling mag hem dan ook
+                continue
+            verwacht = {k: regel.get(k) for k in ("tijd", "soort", "caption")}
+            ig = instagram_deel(al[0]).get("accountId")
+            post = z.post(al[0]["_id"], ig.get("_id") if isinstance(ig, dict) else regel.get("account"))
+            neem_over(regel, post)
+            fout = z.controleer(post, tijd=verwacht["tijd"], trial=verwacht["soort"] == "trial", caption=verwacht["caption"])
+            if fout:
+                regel["fout"] = fout
+            gevonden.append(pid)
     return gevonden
 
 
@@ -176,23 +238,22 @@ def voorstel(map_, ronde, cfg, z, soort, vanaf):
     op_naam = {a["gebruikersnaam"].lower(): a["id"] for a in accounts}
     namen = {a["id"]: a["gebruikersnaam"] for a in accounts}
     boek_pad = map_ / "ingepland.json"
-    boek = lees_json(boek_pad, {"posts": {}})
-    for p in ronde["posts"]:
-        r = boek["posts"].get(p["id"], {})
-        if r.get("sleutel") and not r.get("zernio_id") and koppeling_van(r) != z.naam:
-            raise PlanFout(f"Reel {p['id']} werd eerder via {koppeling_van(r)} ingepland, maar het antwoord kwam niet aan: misschien "
-                           f"staat hij daar al. Zet de koppeling eerst terug op {koppeling_van(r)} (sleutel.py --bewaard "
-                           f"{koppeling_van(r).lower()}) en maak daar het voorstel; dan zoekt de starter hem terug.")
-    verweesd = zoek_verweesd(z, boek)
-    agenda = {a["id"]: z.bezet(a["id"]) for a in accounts}
-    opnieuw = opnieuw_vrij(z, boek, agenda)
-    if verweesd or opnieuw:
+    boek = lees_boek(boek_pad)
+    voor = json.dumps(boek, sort_keys=True)
+    zoek_verweesd(z, boek)
+    agenda = {a["id"]: z.agenda(a["id"]) for a in accounts}
+    opnieuw, zelf = opnieuw_vrij(z, boek, agenda)
+    werk_tijden_bij(z, boek, agenda)
+    if json.dumps(boek, sort_keys=True) != voor:
         schrijf_json(boek_pad, boek)
     nog_stoppen = sorted(pid for pid, r in boek["posts"].items() if r.get("zernio_id") and r.get("fout")
                          and koppeling_van(r) == z.naam and r.get("status") != "published")
+    # Half ingepland via een vorige koppeling en daar nog niet nagekeken: misschien staat hij daar al
+    elders = {pid: koppeling_van(r) for pid, r in boek["posts"].items()
+              if r.get("sleutel") and not r.get("zernio_id") and koppeling_van(r) != z.naam and not r.get("nagekeken")}
     posts, niet_actueel = [], []
     for p in ronde["posts"]:
-        if boek["posts"].get(p["id"], {}).get("zernio_id"):
+        if boek["posts"].get(p["id"], {}).get("zernio_id") or p["id"] in elders:
             continue
         if not actueel(map_, p, cfg):
             niet_actueel.append(p["id"])
@@ -204,6 +265,8 @@ def voorstel(map_, ronde, cfg, z, soort, vanaf):
         raise PlanFout(f"Deze reels zijn nog niet (opnieuw) gemaakt sinds de tekst, het stuk video of de stijl veranderde: "
                        f"{', '.join(niet_actueel)}. Draai eerst maak_reels.py.")
     if not posts:
+        if elders:
+            raise PlanFout(hulp_elders(elders))
         if nog_stoppen:
             raise PlanFout(f"Er valt nu niets in te plannen. Reel {', '.join(nog_stoppen)} staat nog in {z.naam} met een fout: "
                            f"de gebruiker stopt die post daar eerst, daarna neemt een nieuw voorstel hem opnieuw mee.")
@@ -224,10 +287,20 @@ def voorstel(map_, ronde, cfg, z, soort, vanaf):
         "al_ingepland": sorted(eigen_ids),
         "opnieuw": sorted(opnieuw),
         "nog_stoppen": nog_stoppen,
+        "zelf_opnieuw": sorted(zelf),
+        "elders": elders,
         "posts": [{"id": pid, "account": a, "gebruikersnaam": namen[a], "tijd": t.isoformat(), "soort": soorten[a],
                    "caption": bron[pid].get("caption", ""), "reel": vingerafdruk(bron[pid], cfg)}
                   for pid, a, t in rij],
     }
+
+
+def hulp_elders(elders):
+    return (f"Niet in dit voorstel: reel {', '.join(sorted(elders))}. Die werd eerder via "
+            f"{' en '.join(sorted(set(elders.values())))} ingepland, maar het antwoord kwam niet aan: misschien staat hij daar al. "
+            "Zet die koppeling even terug (sleutel.py --bewaard <naam>) en maak daar een voorstel: dan zoekt de starter hem "
+            "terug. Kan dat niet meer, laat de gebruiker daar dan zelf kijken; staat hij er niet, dan geeft "
+            "plan_ronde.py <ronde> --vrijgeven <id> hem vrij.")
 
 
 def toon_voorstel(v, ronde, boek):
@@ -244,6 +317,11 @@ def toon_voorstel(v, ronde, boek):
         print()
     if v.get("opnieuw"):
         print(f"Opnieuw in dit voorstel, want gestopt of mislukt bij {via}: {', '.join(v['opnieuw'])}.\n")
+    if v.get("zelf_opnieuw"):
+        print(f"Niet opnieuw: {', '.join(v['zelf_opnieuw'])}. Die mislukte, maar er staat al een post met dezelfde caption in "
+              f"{via} die de starter niet zette (de gebruiker zette hem zelf opnieuw).\n")
+    if v.get("elders"):
+        print(hulp_elders(v["elders"]) + "\n")
     regels = []
     for p in v["posts"]:
         t = datetime.fromisoformat(p["tijd"]).astimezone(tz)
@@ -273,7 +351,7 @@ def echt(map_, ronde, cfg, z):
     if v.get("posten") != cfg["posten"]:
         raise PlanFout(verouderd.format("de postregels zijn veranderd"))
     boek_pad = map_ / "ingepland.json"
-    boek = lees_json(boek_pad, {"posts": {}})
+    boek = lees_boek(boek_pad)
     # Wat uit deze ronde al bij Zernio stond, moet nog hetzelfde zijn als bij het voorstel (posts van dit voorstel zelf, van
     # een eerdere poging die halverwege stopte, tellen niet: die horen er juist bij)
     in_voorstel = {p["id"] for p in v["posts"]}
@@ -287,13 +365,19 @@ def echt(map_, ronde, cfg, z):
         if not b or b.get("caption", "") != p["caption"] or vingerafdruk(b, cfg) != p["reel"] or not actueel(map_, b, cfg):
             raise PlanFout(verouderd.format(f"reel {p['id']} of zijn caption is veranderd"))
     # 1. Kwam een eerdere poging wel aan maar het antwoord niet, dan hoort die post er gewoon bij
+    mislukt = []
     for pid in zoek_verweesd(z, boek):
-        schrijf_json(boek_pad, boek)
         r = boek["posts"][pid]
         print(f"al bij {z.naam}: {pid} op {nl(tijd_van(r['tijd']).astimezone(ZoneInfo(v['tijdzone'])))} (van een eerdere poging)")
+        if r.get("fout"):
+            mislukt.append(f"{pid}: {r['fout']}")
+            print(f"MISLUKT: {pid} op @{r.get('gebruikersnaam', '?')}")
+    schrijf_json(boek_pad, boek)
     open_ = [p for p in open_ if not boek["posts"].get(p["id"], {}).get("zernio_id")]
     if not open_:
         print(f"Alles uit dit voorstel staat al klaar bij {z.naam}. Kijk hoe het gaat met --stand.")
+        if mislukt:
+            print("Mislukt:\n" + "\n".join(f"{n}. {m}" for n, m in enumerate(mislukt, 1)))
         return
     # 2. Alles moet nog in de toekomst liggen, en er mag intussen niets anders op die plekken staan
     nu = datetime.now(timezone.utc)
@@ -301,7 +385,10 @@ def echt(map_, ronde, cfg, z):
         raise PlanFout(verouderd.format("een tijd ligt (bijna) in het verleden"))
     eigen_ids = {e.get("zernio_id") for e in boek["posts"].values()}
     namen = {p["account"]: p["gebruikersnaam"] for p in open_}
-    bezet = bezette_tijden(z, {a: z.bezet(a) for a in sorted(namen)}, namen, behalve=eigen_ids)
+    agenda = {a: z.agenda(a) for a in sorted(namen)}
+    if werk_tijden_bij(z, boek, agenda):
+        schrijf_json(boek_pad, boek)
+    bezet = bezette_tijden(z, agenda, namen, behalve=eigen_ids)
     for e in boek["posts"].values():
         if e.get("zernio_id") and e.get("tijd") and e.get("account") in bezet:
             bezet[e["account"]].append(tijd_van(e["tijd"]))
@@ -312,13 +399,14 @@ def echt(map_, ronde, cfg, z):
             raise PlanFout(verouderd.format(f"er is intussen iets anders ingepland op @{p['gebruikersnaam']}"))
         gepland.setdefault(p["account"], []).append(t)
     # 3. Inplannen, en na elke stap opschrijven wat er al is
-    klaar, mislukt = 0, []
+    klaar = 0
     with z.media([map_ / "klaar" / f"{p['id']}.mp4" for p in open_]):
         for p in open_:
             regel = boek["posts"].setdefault(p["id"], {})
             regel.setdefault("sleutel", uuid.uuid4().hex)
             regel.update({k: p[k] for k in ("account", "gebruikersnaam", "tijd", "soort", "caption")})
             regel.update(reel=p["reel"], koppeling=z.naam)
+            regel.pop("nagekeken", None)
             schrijf_json(boek_pad, boek)
             # Bij Zernio blijft een geüploade video staan; bij Metricool hoort het adres bij de tunnel van nu
             video_url = regel.get("video_url") if z.blijvende_media else None
@@ -352,9 +440,8 @@ def echt(map_, ronde, cfg, z):
 
 def stand(map_, ronde, cfg, z):
     boek_pad = Path(map_) / "ingepland.json"
-    boek = lees_json(boek_pad, {"posts": {}})
-    if zoek_verweesd(z, boek):
-        schrijf_json(boek_pad, boek)
+    boek = lees_boek(boek_pad)
+    zoek_verweesd(z, boek)
     if not boek["posts"]:
         raise PlanFout("Van deze ronde is nog niets ingepland.")
     tz = ZoneInfo(cfg["posten"]["tijdzone"])
@@ -362,7 +449,10 @@ def stand(map_, ronde, cfg, z):
     tel, meldingen = {}, []
     for pid, regel in sorted(boek["posts"].items(), key=lambda kv: kv[1].get("tijd", "")):
         if not regel.get("zernio_id"):
-            if regel.get("sleutel"):
+            if regel.get("sleutel") and koppeling_van(regel) != z.naam and not regel.get("nagekeken"):
+                w = f"half ingepland via {koppeling_van(regel)} (zie het voorstel)"
+                tel[w] = tel.get(w, 0) + 1
+            elif regel.get("sleutel"):
                 tel["half ingepland (draai --echt opnieuw)"] = tel.get("half ingepland (draai --echt opnieuw)", 0) + 1
             elif regel.get("eerder"):
                 tel["gestopt of mislukt, nog niet opnieuw ingepland"] = tel.get("gestopt of mislukt, nog niet opnieuw ingepland", 0) + 1
@@ -380,8 +470,14 @@ def stand(map_, ronde, cfg, z):
                 continue
             regel["status"] = "weg"
             tel[f"niet meer bij {z.naam} (gestopt)"] = tel.get(f"niet meer bij {z.naam} (gestopt)", 0) + 1
-            meldingen.append(f"{pid} staat niet meer bij {z.naam}. Een nieuw voorstel neemt hem opnieuw mee; wil de gebruiker hem "
-                             f"niet meer, haal hem dan uit ronde.json.")
+            tijd = nl(tijd_van(regel["tijd"]).astimezone(tz))
+            if tijd_van(regel["tijd"]) > datetime.now(timezone.utc):
+                meldingen.append(f"{pid} ({tijd}) staat niet meer bij {z.naam}. Een nieuw voorstel neemt hem opnieuw mee; wil de "
+                                 f"gebruiker hem niet meer, haal hem dan uit ronde.json.")
+            else:
+                meldingen.append(f"{pid} ({tijd}) staat niet meer bij {z.naam}, maar zijn tijd is voorbij: hij kan al online staan. "
+                                 f"Hij gaat daarom niet vanzelf opnieuw mee. Kijk in Instagram; ontbreekt hij daar en wil de "
+                                 f"gebruiker hem toch, zet hem dan onder een nieuw id in ronde.json.")
             continue
         ig = instagram_deel(post)
         status = ig.get("status") or post.get("status")
@@ -396,7 +492,7 @@ def stand(map_, ronde, cfg, z):
             meldingen.append(f"{pid} op @{regel['gebruikersnaam']} ({tijd}): {regel['fout']}")
         elif woord == "mislukt":
             meldingen.append(f"{pid} op @{regel['gebruikersnaam']} ({tijd}) is mislukt: {ig.get('errorMessage') or 'geen reden gegeven'}. "
-                             f"Een nieuw voorstel neemt hem opnieuw mee.")
+                             f"Een nieuw voorstel neemt hem opnieuw mee (zet hem dus niet zelf opnieuw in {z.naam}).")
         tel[woord] = tel.get(woord, 0) + 1
         b = bron.get(pid)
         if b and regel.get("reel") and woord == "gepland" and vingerafdruk(b, cfg) != regel["reel"]:
@@ -406,6 +502,19 @@ def stand(map_, ronde, cfg, z):
     print("Stand: " + ", ".join(f"{n} {w}" for w, n in tel.items()) + ".")
     if meldingen:
         print("\n".join(f"{n}. {m}" for n, m in enumerate(meldingen, 1)))
+
+
+def vrijgeven(map_, ids):
+    """De gebruiker keek zelf bij de vorige koppeling: deze half ingeplande reels staan daar niet. Dan mogen ze weer mee."""
+    boek_pad = Path(map_) / "ingepland.json"
+    boek = lees_boek(boek_pad)
+    for pid in ids:
+        r = boek["posts"].get(pid)
+        if not r or r.get("zernio_id") or not r.get("sleutel"):
+            raise PlanFout(f"Reel {pid} is niet half ingepland; vrijgeven is alleen voor een reel waarvan het antwoord wegviel.")
+        r["nagekeken"] = True
+    schrijf_json(boek_pad, boek)
+    print(f"Vrijgegeven: {', '.join(ids)}. Een nieuw voorstel neemt ze mee.")
 
 
 def stop_netjes():
@@ -419,6 +528,8 @@ def main():
     ap.add_argument("ronde")
     ap.add_argument("--echt", action="store_true", help="het voorstel echt klaarzetten via de koppeling")
     ap.add_argument("--stand", action="store_true", help="hoe staan de reels van deze ronde ervoor")
+    ap.add_argument("--vrijgeven", nargs="+", metavar="ID", help="half ingeplande reels van een vorige koppeling vrijgeven, "
+                                                                 "alleen als de gebruiker zag dat ze daar niet staan")
     ap.add_argument("--soort", choices=["auto", "trial", "gewoon"], default="auto")
     ap.add_argument("--vanaf", type=date.fromisoformat, help="niet eerder beginnen dan deze dag (JJJJ-MM-DD)")
     a = ap.parse_args()
@@ -429,14 +540,16 @@ def main():
         ronde = lees_ronde(map_, bron=False)
         z = maak_koppeling(cfg)
         with slot(map_, "inplannen"):
-            if a.stand:
+            if a.vrijgeven:
+                vrijgeven(map_, a.vrijgeven)
+            elif a.stand:
                 stand(map_, ronde, cfg, z)
             elif a.echt:
                 echt(map_, ronde, cfg, z)
             else:
                 v = voorstel(map_, ronde, cfg, z, a.soort, a.vanaf)
                 schrijf_json(map_ / "voorstel.json", v)
-                toon_voorstel(v, ronde, lees_json(map_ / "ingepland.json", {"posts": {}}))
+                toon_voorstel(v, ronde, lees_boek(map_ / "ingepland.json"))
     except (PlanFout, RondeFout, InstellingFout, KoppelFout, SlotFout) as e:
         sys.exit(str(e))
 

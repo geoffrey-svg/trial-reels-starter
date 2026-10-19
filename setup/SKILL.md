@@ -16,6 +16,8 @@ Eenmalig. Doe de stappen op volgorde en sla over wat al klaar is. Per stap: éé
 
 ## Stap 3: hoe wil je posten?
 
+Staat `mijn-trial-reels/accounts.json` er al maar `koppeling.json` niet, dan is dit een installatie van voor deze keuze (versie 1.0, via Zernio). Vraag dan niets en maak geen nieuwe sleutel: `python3 engine/scripts/sleutel.py --bewaard zernio`, en ga door naar stap 5.
+
 Leg in een paar zinnen uit dat de reels via een koppeling op het afgesproken moment op Instagram komen, en dat hij kiest welke. Geef de drie mogelijkheden en vraag welke hij wil:
 
 1. **Metricool**, als hij dat al gebruikt. Dan komen de reels in zijn eigen Metricool-planner, net als zijn andere posts, en komen de cijfers ook uit Metricool. Nodig: het Advanced-abonnement of hoger (daar zit de API in; vanaf €43 per maand bij een jaar vooruit, volgens metricool.com/pricing op 19 oktober 2026) en zijn Instagram-account als merk in Metricool.
