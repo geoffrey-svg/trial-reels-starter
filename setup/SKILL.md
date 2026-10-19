@@ -27,9 +27,11 @@ Leg in een paar zinnen uit dat de reels via een koppeling op het afgesproken mom
 **Metricool**
 
 1. `./install.sh --metricool`: zet cloudflared klaar. Metricool neemt een video alleen aan via een openbaar adres; daarvoor zet het systeem de map met reels heel even openbaar, alleen tijdens het inplannen.
-2. Laat de gebruiker in Metricool zijn API-gegevens opzoeken: de userToken staat in de instellingen van zijn account, bij de API (de documentatie van Metricool noemt hem "userToken" en zegt dat hij in de account settings staat), en daar staat ook zijn gebruikersnummer (userId).
+2. Laat de gebruiker in Metricool zijn API-gegevens opzoeken (zo beschreven in het helpcentrum van Metricool, help.metricool.com, "Hoe vind je je Metricool-gebruikers-ID", gelezen 19 oktober 2026):
+   1. De **token**: in Metricool bij **Accountinstellingen**, onder **API**. Die is er alleen in de abonnementen Advanced en Custom.
+   2. Het **gebruikersnummer** (userId): open Metricool in de browser en open een merk. In de adresbalk staat dan iets als `...?blogId=12345&userId=1234567`; het nummer na `userId=` is het gebruikersnummer (het nummer na `blogId=` is het merk, dat is niet nodig).
 3. Hij plakt de token en het gebruikersnummer in de chat. Bewaar ze met `printf '%s' '<token>' | python3 engine/scripts/sleutel.py --metricool --user <gebruikersnummer>`. Herhaal de token nooit in je antwoord. Het script probeert ze eerst bij Metricool; werkt het niet, laat de gebruiker ze dan nakijken (en of zijn abonnement de API heeft).
-4. `python3 engine/scripts/koppel.py` toont de merken met een Instagram-account. Zet het juiste in gebruik met `python3 engine/scripts/koppel.py --gebruik <instagramnaam>`.
+4. `python3 engine/scripts/koppel.py` toont de merken met een Instagram-account. Zet het juiste in gebruik met `python3 engine/scripts/koppel.py --gebruik <instagramnaam>`. Hangt dat Instagram-account onder twee merken, dan vraagt het script om het nummer van het merk: vraag de gebruiker welk merk, en gebruik `--gebruik <nummer>`.
 
 **Zernio**
 

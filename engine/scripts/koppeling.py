@@ -28,8 +28,14 @@ def lees():
 
 
 def schrijf(k):
+    """Bewaart de keuze. Wat er al stond (zoals het Metricool-gebruikersnummer) blijft, zodat terugwisselen kan
+    zonder alles opnieuw te vragen."""
+    try:
+        oud = lees() if BESTAND.exists() else {}
+    except KoppelFout:
+        oud = {}
     MIJN.mkdir(parents=True, exist_ok=True)
-    BESTAND.write_text(json.dumps(k, indent=2) + "\n", encoding="utf-8")
+    BESTAND.write_text(json.dumps({**oud, **k}, indent=2) + "\n", encoding="utf-8")
 
 
 def maak(cfg):

@@ -27,6 +27,7 @@ class NepMetricool:
         self.stats = {}         # blogId -> lijst reels
         self.aanroepen = []
         self.storing = []       # ("pad-patroon", "slik" of statuscode)
+        self.kopie_lukt = True  # False: Metricool krijgt de video niet binnen (de post komt er wel)
         self.volgende_id = 900000
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self.basis = f"http://127.0.0.1:{self.server.server_address[1]}/api"
@@ -100,7 +101,7 @@ class NepMetricool:
                         return 400, {"message": "bad request"}
                     ZoneInfo(body["publicationDate"]["timezone"])
                     media = body["media"]
-                    if body.get("saveExternalMediaFiles"):
+                    if body.get("saveExternalMediaFiles") and nep.kopie_lukt:
                         # Metricool haalt de video op terwijl de post gemaakt wordt; lukt dat, dan staat hij op static.metricool.com
                         try:
                             with urllib.request.urlopen(media[0], timeout=5) as r:

@@ -128,7 +128,7 @@ class TestZernioFlow(unittest.TestCase):
         with self.assertRaisesRegex(PlanFout, "al klaar"):
             self.voorstel()
         uit = self.echt()
-        self.assertIn("0 reels", uit)
+        self.assertIn("Alles uit dit voorstel staat al klaar", uit)
         self.assertEqual(len(self.nep.posts), 4)
 
     def test_weggevallen_antwoord_geeft_geen_tweede_post(self):

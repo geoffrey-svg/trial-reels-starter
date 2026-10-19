@@ -7,6 +7,8 @@ computer, buiten het project, en onthoudt welke koppeling deze gebruiker heeft.
     printf '%s' 'sk_...' | python3 engine/scripts/sleutel.py
     printf '%s' '<token>' | python3 engine/scripts/sleutel.py --metricool --user 1234567
     python3 engine/scripts/sleutel.py --zelf                          geen koppeling: zelf posten met een ander programma
+    python3 engine/scripts/sleutel.py --bewaard zernio|metricool      terug naar een koppeling waarvan de sleutel of
+                                                                      token hier al bewaard is (geen nieuwe nodig)
 
 De sleutel of token komt in ~/.config/trial-reels-starter/, alleen leesbaar voor jou. Eerst wordt
 hij geprobeerd; een sleutel die niet werkt, wordt niet bewaard. Een vorige blijft ernaast staan
@@ -39,7 +41,25 @@ def main():
     ap.add_argument("--metricool", action="store_true", help="de token van Metricool in plaats van een Zernio-sleutel")
     ap.add_argument("--user", help="het Metricool-gebruikersnummer (userId), te vinden bij de API-instellingen in Metricool")
     ap.add_argument("--zelf", action="store_true", help="geen koppeling: de gebruiker post zelf met een ander programma")
+    ap.add_argument("--bewaard", choices=["zernio", "metricool"], help="wissel naar deze koppeling met de sleutel of token die hier al staat")
     a = ap.parse_args()
+    if a.bewaard:
+        try:
+            vorige = koppeling.lees()
+            if a.bewaard == "zernio":
+                from zernio import Zernio
+                aantal = len(Zernio().accounts())
+                koppeling.schrijf({"soort": "zernio"})
+            else:
+                from metricool import Metricool
+                user = a.user or vorige.get("metricool_user")
+                aantal = len(Metricool(user_id=user, tijdzone=laad()["posten"]["tijdzone"]).accounts())
+                koppeling.schrijf({"soort": "metricool", "metricool_user": str(user)})
+        except (KoppelFout, InstellingFout) as e:
+            sys.exit(str(e))
+        print(f"De koppeling is nu {'Zernio' if a.bewaard == 'zernio' else 'Metricool'}, met de sleutel die hier al stond: hij werkt "
+              f"({aantal} Instagram-account(s)). Kijk met koppel.py welke accounts in gebruik zijn.")
+        return
     if a.zelf:
         koppeling.schrijf({"soort": "zelf"})
         print("Geen koppeling: je post zelf. De starter maakt de reels; inplannen en cijfers doe je in je eigen programma.")

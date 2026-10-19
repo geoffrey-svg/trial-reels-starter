@@ -46,17 +46,33 @@ def ingepland():
             if regel.get("zernio_id"):
                 p = bron.get(pid, {})
                 uit[regel["zernio_id"]] = {"ronde": ronde_map.name, "id": pid, "account": regel.get("account"),
+                                           "koppeling": regel.get("koppeling", "Zernio"),
                                            "gebruikersnaam": regel.get("gebruikersnaam"), "soort": regel.get("soort"),
                                            "tekst": p.get("tekst") or "", "caption": p.get("caption") or "",
                                            "angle": p.get("angle") or ""}
     return uit
 
 
-def verzamel(z, eigen, dagen, nu):
+def verzamel(z, eigen, dagen, nu, meldingen=None):
+    """De cijfers per reel. Een account waarvan de koppeling geen cijfers geeft, of reels die via een andere koppeling
+    gingen, komen als melding in meldingen; de rest van het verslag gaat gewoon door."""
+    meldingen = [] if meldingen is None else meldingen
     vanaf = (nu - timedelta(days=dagen)).date().isoformat()
-    reels = []
-    for account in sorted({e["account"] for e in eigen.values() if e.get("account")}):
-        for post in z.cijfers(account, vanaf):
+    reels, elders = [], {}
+    for e in eigen.values():
+        if e.get("koppeling", "Zernio") != z.naam:
+            elders[e.get("koppeling", "Zernio")] = elders.get(e.get("koppeling", "Zernio"), 0) + 1
+    for k, n in sorted(elders.items()):
+        meldingen.append(f"{n} reel(s) gingen via {k}; hun cijfers staan in {k}. Wil je ze hier zien, zet die koppeling dan "
+                         f"terug met sleutel.py --bewaard {k.lower()} en vraag de cijfers opnieuw.")
+    for account in sorted({e["account"] for e in eigen.values() if e.get("account") and e.get("koppeling", "Zernio") == z.naam}):
+        try:
+            lijst = z.cijfers(account, vanaf)
+        except KoppelFout as f:
+            naam = next((e.get("gebruikersnaam") for e in eigen.values() if e.get("account") == account), None) or account
+            meldingen.append(f"Van @{naam} kwamen geen cijfers: {f}")
+            continue
+        for post in lijst:
             info = eigen.get(post.get("latePostId")) or eigen.get(post.get("_id"))
             if not info or not post.get("publishedAt"):
                 continue
@@ -92,7 +108,7 @@ def getal(v):
     return f"{v / 1000:.1f}k".replace(".0k", "k") if v >= 10000 else str(int(v))
 
 
-def verslag(reels, medianen, cfg, nu):
+def verslag(reels, medianen, cfg, nu, meldingen=()):
     tz = ZoneInfo(cfg["posten"]["tijdzone"])
     w = cfg["winners"]
     namen = {r["account"]: r["gebruikersnaam"] for r in reels}
@@ -100,6 +116,8 @@ def verslag(reels, medianen, cfg, nu):
     regels = [f"# Cijfers trial reels, {nl(nu.astimezone(tz))} {nu.astimezone(tz).year}", "",
               f"{len(reels)} reels gevonden, waarvan {len(rijp)} ouder dan 48 uur. "
               f"Winner: minstens {w['factor']} keer de mediaan van het eigen account en minstens {w['min_views']} views.", ""]
+    if meldingen:
+        regels += ["## Let op", ""] + [f"{n}. {m}" for n, m in enumerate(meldingen, 1)] + [""]
     regels += ["## Per account", "", "| account | soort | reels (rijp) | mediaan views |", "|---|---|---|---|"]
     for a, soort in sorted({(r["account"], r["soort"]) for r in reels}, key=lambda x: (namen.get(x[0]) or "", x[1] or "")):
         alle = [r for r in reels if r["account"] == a and r["soort"] == soort]
@@ -152,9 +170,10 @@ def main():
         if not eigen:
             sys.exit("Er is nog niets ingepland met deze starter, dus er zijn nog geen cijfers.")
         nu = datetime.now(timezone.utc)
-        reels = verzamel(maak_koppeling(cfg), eigen, max(1, min(a.dagen, 366)), nu)
+        meldingen = []
+        reels = verzamel(maak_koppeling(cfg), eigen, max(1, min(a.dagen, 366)), nu, meldingen)
         medianen = beoordeel(reels, cfg["winners"])
-        tekst = verslag(reels, medianen, cfg, nu)
+        tekst = verslag(reels, medianen, cfg, nu, meldingen)
     except (InstellingFout, KoppelFout) as e:
         sys.exit(str(e))
     map_ = MIJN / "cijfers"
@@ -163,6 +182,8 @@ def main():
     uit.write_text(tekst, encoding="utf-8")
     winners = sum(1 for r in reels if r["winner"])
     print(f"{len(reels)} reels, {winners} winner(s). Verslag: {uit}")
+    if meldingen:
+        print("Let op:\n" + "\n".join(f"{n}. {m}" for n, m in enumerate(meldingen, 1)))
 
 
 if __name__ == "__main__":

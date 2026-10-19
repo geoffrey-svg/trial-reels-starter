@@ -103,6 +103,15 @@ class TestMetricool(unittest.TestCase):
         self.assertTrue(all(datetime.fromisoformat(p["tijd"]) - nu >= timedelta(minutes=60) for p in v["posts"]))
         self.assertFalse([a for a in self.nep.aanroepen if a[0] == "POST"], "een voorstel plant niets in")
 
+    def test_een_plek_binnen_het_uur_slaat_metricool_over(self):
+        # Onafhankelijk van de klok van nu: een vaste plek ligt 30 minuten vooruit, en Metricool wil minstens een uur
+        import planning
+        p = cfg()["posten"]
+        dag = (datetime.now(AMS) + timedelta(days=2)).date()
+        nu = (planning.dagtijden(dag, p)[1] - timedelta(minutes=30)).astimezone(timezone.utc)
+        (_, _, tijd), = planning.plan([("01", None)], ["111"], {"111": []}, p, nu, marge=self.z.marge_minuten)
+        self.assertGreaterEqual(tijd - nu, timedelta(minutes=60))
+
     def test_echt_plant_trial_reels_met_de_video_bij_metricool(self):
         v = self.voorstel(cfg(doorzetten="automatisch"))
         uit = self.echt(cfg(doorzetten="automatisch"))
@@ -137,13 +146,35 @@ class TestMetricool(unittest.TestCase):
         self.assertEqual(len(self.nep.posts), 3, "teruggevonden op tijd en caption, niet opnieuw gemaakt")
         self.assertTrue(all(r.get("zernio_id") for r in self.boek().values()))
 
-    def test_video_die_niet_aankomt_heet_mislukt(self):
+    def test_tunnel_die_niet_werkt_plant_niets(self):
         self.z = self.metricool(tunnel=kapotte_tunnel)
+        self.voorstel()
+        with self.assertRaisesRegex(KoppelFout, "niet bereikbaar"), redirect_stdout(io.StringIO()):
+            pr.echt(self.map_, self.ronde(), cfg(), self.z)
+        self.assertEqual(self.nep.posts, {}, "eerst kijken of de video op te halen is, dan pas inplannen")
+
+    def test_video_die_niet_aankomt_heet_mislukt_en_kan_daarna_opnieuw(self):
+        self.nep.kopie_lukt = False
         self.voorstel()
         uit = self.echt()
         self.assertIn("MISLUKT", uit)
         self.assertIn("video kwam niet aan bij Metricool", uit)
         self.assertIn("0 reels ingepland", uit)
+        with redirect_stdout(io.StringIO()) as st:
+            pr.stand(self.map_, self.ronde(), cfg(), self.z)
+        self.assertIn("3 mislukt bij het inplannen", st.getvalue(), "niet 'gepland': de post gaat zo nooit goed")
+        with self.assertRaisesRegex(pr.PlanFout, "stopt die post daar eerst"):
+            self.voorstel()
+        self.nep.posts.clear()            # de gebruiker stopt de drie posts in Metricool
+        self.nep.kopie_lukt = True
+        v = self.voorstel()
+        self.assertEqual(v["opnieuw"], ["01", "02", "03"])
+        self.assertIn("3 reels ingepland", self.echt())
+        self.assertEqual(len(self.nep.posts), 3)
+        self.assertTrue(all(p["media"][0].startswith("https://static.metricool.com/") for p in self.nep.posts.values()))
+        b = self.boek()
+        self.assertTrue(all(r["zernio_id"] and not r.get("fout") and r["eerder"][0]["status"] == "weg" for r in b.values()),
+                        "de mislukte poging staat nog in het boek, onder eerder")
 
     def test_stand_gepland_mislukt_en_weg(self):
         self.voorstel()

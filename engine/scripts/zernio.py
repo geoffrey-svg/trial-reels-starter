@@ -143,7 +143,7 @@ class Zernio:
 
     # Video's
 
-    def media(self, map_):
+    def media(self, bestanden):
         """Bij Zernio gaat elke video zelf omhoog; er hoeft niets klaar te staan."""
         return contextlib.nullcontext()
 

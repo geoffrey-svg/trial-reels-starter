@@ -168,15 +168,58 @@ def _meng(oud, nieuw):
     return uit
 
 
-def eigen_keuzes(pad=CONFIG):
-    """Wat de gebruiker zelf koos, zonder de standaard. Een blok dat ontbreekt, is nog niet gekozen (de setup kijkt daarnaar)."""
+# Pas als al deze velden zelf gekozen zijn, telt een blok als gekozen (de setup kijkt daarnaar)
+NODIG = {"posten": ("per_dag", "minuten_tussen", "van", "tot", "tijdzone", "doorzetten"), "winners": ("factor", "min_views")}
+
+
+def lees_eigen(pad=CONFIG):
+    """Wat de gebruiker zelf koos, zonder de standaard, plus de velden die niet (meer) door de keuring komen. Een
+    ongeldig veld valt weg; de rest van de eigen keuzes blijft (de vorige versie blijft bewaard in oud/)."""
     pad = Path(pad)
     try:
         eigen = json.loads(pad.read_text(encoding="utf-8")) if pad.exists() else {}
-        keur(_samen(json.loads(STANDAARD.read_text(encoding="utf-8")), eigen))
-        return eigen
-    except (InstellingFout, json.JSONDecodeError, AttributeError, TypeError):
-        return {}   # de oude instellingen kloppen niet (meer): opnieuw beginnen; de oude blijft bewaard in oud/
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, ["het hele bestand"]
+    if not isinstance(eigen, dict):
+        return {}, ["het hele bestand"]
+    standaard = json.loads(STANDAARD.read_text(encoding="utf-8"))
+
+    def past(keuzes):
+        try:
+            keur(_samen(standaard, keuzes))
+            return True
+        except (InstellingFout, AttributeError, TypeError):
+            return False
+
+    goed, weg = {}, []
+    for blok in ("tekst", "posten", "winners"):
+        waarden = eigen.get(blok)
+        if waarden is None:
+            continue
+        if not isinstance(waarden, dict):
+            weg.append(blok)
+        elif past({**goed, blok: waarden}):
+            goed[blok] = dict(waarden)
+        else:
+            goed[blok] = {}
+            for k, v in waarden.items():
+                if past({**goed, blok: {**goed[blok], k: v}}):
+                    goed[blok][k] = v
+                else:
+                    weg.append(f"{blok}.{k}")
+    return goed, weg
+
+
+def eigen_keuzes(pad=CONFIG):
+    """Wat de gebruiker zelf koos, zonder de standaard."""
+    return lees_eigen(pad)[0]
+
+
+def nog_niet_gekozen(pad=CONFIG):
+    """Welke blokken de gebruiker nog niet helemaal zelf koos, in gewone woorden."""
+    eigen = eigen_keuzes(pad)
+    return [w for blok, w in (("posten", "de postregels"), ("winners", "wanneer iets een winner is"))
+            if not all(k in (eigen.get(blok) or {}) for k in NODIG[blok])]
 
 
 def schrijf(nieuw, pad=CONFIG):
@@ -233,14 +276,17 @@ def main():
     try:
         if a.schrijf:
             tekst = sys.stdin.read() if a.schrijf == "-" else Path(a.schrijf).read_text(encoding="utf-8")
+            weg = lees_eigen()[1]
             cfg = schrijf(json.loads(tekst))
             print(f"Bewaard in {CONFIG}.")
+            if weg:
+                print(f"Niet meer geldig en weggelaten uit de eigen keuzes: {', '.join(weg)} (de vorige versie staat in {MIJN / 'oud'}).")
         else:
             cfg = laad()
         print(in_woorden(cfg))
-        nog = [w for blok, w in (("posten", "de postregels"), ("winners", "wanneer iets een winner is")) if blok not in eigen_keuzes()]
+        nog = nog_niet_gekozen()
         if nog:
-            print(f"Nog niet gekozen: {' en '.join(nog)} (setup stap 5); tot dan gelden de standaardwaarden hierboven.")
+            print(f"Nog niet (helemaal) gekozen: {' en '.join(nog)} (setup stap 5); tot dan gelden de standaardwaarden hierboven.")
     except json.JSONDecodeError as e:
         sys.exit(f"Dit is geen geldig blok met instellingen: {e}")
     except InstellingFout as e:
