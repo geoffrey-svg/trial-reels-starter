@@ -1,0 +1,24 @@
+{
+  "versie": 1,
+  "tekst": {
+    "font": "Poppins-ExtraBold.ttf",
+    "vorm": "blokje",
+    "kleur_tekst": "#000000",
+    "kleur_vlak": "#FFFFFF",
+    "grootte": "normaal",
+    "positie": "boven",
+    "hoofdletters": false
+  },
+  "posten": {
+    "per_dag": 5,
+    "minuten_tussen": 45,
+    "van": 9,
+    "tot": 21,
+    "tijdzone": "Europe/Amsterdam",
+    "doorzetten": "zelf"
+  },
+  "winners": {
+    "factor": 3,
+    "min_views": 500
+  }
+}

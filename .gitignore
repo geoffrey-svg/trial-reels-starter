@@ -1,0 +1,8 @@
+# alles van de gebruiker blijft lokaal
+mijn-trial-reels/*
+!mijn-trial-reels/LEESMIJ.md
+
+# systeem
+.DS_Store
+__pycache__/
+*.pyc

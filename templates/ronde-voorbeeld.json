@@ -1,0 +1,28 @@
+{
+  "naam": "2026-10-20-eerste-ronde",
+  "posts": [
+    {
+      "id": "01",
+      "video": "/Users/jij/Movies/clips/wandeling.mp4",
+      "tekst": "Waarom je reels geen bereik krijgen 👇",
+      "caption": "De meeste mensen doen dit fout. Jij ook? Reageer met BEREIK en ik stuur je de checklist.",
+      "angle": "fout"
+    },
+    {
+      "id": "02",
+      "video": "/Users/jij/Movies/clips/wandeling.mp4",
+      "tekst": "Zo kreeg ik 10.000 views zonder volgers",
+      "caption": "Dit veranderde alles voor mij.",
+      "angle": "resultaat",
+      "van": 12,
+      "tot": 20
+    },
+    {
+      "id": "03",
+      "video": "/Users/jij/Movies/clips/kantoor.mov",
+      "caption": "Zonder tekst in beeld, alleen een caption.",
+      "angle": "verhaal",
+      "account": "mijn_tweede_account"
+    }
+  ]
+}
